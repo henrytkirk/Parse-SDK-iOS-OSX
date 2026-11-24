@@ -16,6 +16,8 @@
 #endif
 @interface PFApplication() {
     NSUInteger _iconBadgeNumber;
+    BOOL _isTrackingIconBadgeNumber;
+    UIApplication *_iconBadgeNumberObservedApplication;
 }
 @end
 
@@ -32,21 +34,6 @@
         application = [[self alloc] init];
     });
     return application;
-}
-
-- (id)init {
-    self = [super init];
-    if (self) {
-#if TARGET_OS_IOS || TARGET_OS_TV
-        if (@available(iOS 1.0, tvOS 10.0, *)) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self.systemApplication addObserver:self forKeyPath:@"applicationIconBadgeNumber" options:NSKeyValueObservingOptionNew context:nil];
-                self->_iconBadgeNumber = self.systemApplication.applicationIconBadgeNumber;
-            });
-        }
-#endif
-    }
-    return self;
 }
 
 ///--------------------------------------
@@ -69,6 +56,7 @@
 #if TARGET_OS_WATCH
     return 0;
 #elif TARGET_OS_IOS || TARGET_OS_TV
+    [self _startTrackingIconBadgeNumberIfNeeded];
     return _iconBadgeNumber;
 #elif PF_TARGET_OS_OSX
     // Make sure not to use `NSApp` here, because it doesn't work sometimes,
@@ -111,6 +99,32 @@
 }
 
 #if TARGET_OS_IOS || TARGET_OS_TV
+/// Starts keeping `_iconBadgeNumber` in sync with the app icon badge number, the first time it's needed.
+/// This doesn't happen at init, because the first badge number read can block the main queue for minutes
+/// on a freshly booted iOS 27 simulator, and apps that don't use the badge never need it.
+/// The first read runs on the main queue. Called off the main queue, the cached value is returned until then.
+- (void)_startTrackingIconBadgeNumberIfNeeded {
+    if (@available(iOS 1.0, tvOS 10.0, *)) {
+        @synchronized (self) {
+            if (_isTrackingIconBadgeNumber) {
+                return;
+            }
+            _isTrackingIconBadgeNumber = YES;
+        }
+        dispatch_block_t block = ^{
+            UIApplication *systemApplication = self.systemApplication;
+            [systemApplication addObserver:self forKeyPath:@"applicationIconBadgeNumber" options:NSKeyValueObservingOptionNew context:nil];
+            self->_iconBadgeNumberObservedApplication = systemApplication;
+            self->_iconBadgeNumber = systemApplication.applicationIconBadgeNumber;
+        };
+        if ([NSThread currentThread].isMainThread) {
+            block();
+        } else {
+            dispatch_async(dispatch_get_main_queue(), block);
+        }
+    }
+}
+
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSString *,id> *)change context:(void *)context {
     if ([keyPath isEqualToString:@"applicationIconBadgeNumber"] && change) {
         _iconBadgeNumber = [change[@"new"] integerValue];
@@ -130,7 +144,7 @@
 - (void)dealloc {
 #if TARGET_OS_IOS || TARGET_OS_TV
     if (@available(iOS 1.0, tvOS 10.0, *)) {
-        [self.systemApplication removeObserver:self forKeyPath:@"applicationIconBadgeNumber"];
+        [_iconBadgeNumberObservedApplication removeObserver:self forKeyPath:@"applicationIconBadgeNumber"];
     }
 #endif
 }

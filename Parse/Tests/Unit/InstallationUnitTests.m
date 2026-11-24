@@ -93,6 +93,35 @@
     PFAssertEqualInts(installation.badge, 10, @"Installation should have the same badge as application");
 }
 
+#if TARGET_OS_IOS
+- (void)testApplicationDoesNotReadBadgeUntilNeeded {
+    PFApplication *application = OCMPartialMock([[PFApplication alloc] init]);
+    id systemApplication = OCMClassMock([UIApplication class]);
+    OCMStub([application systemApplication]).andReturn(systemApplication);
+    OCMReject([systemApplication applicationIconBadgeNumber]);
+    OCMReject([systemApplication addObserver:OCMOCK_ANY forKeyPath:@"applicationIconBadgeNumber" options:0 context:NULL]).ignoringNonObjectArgs();
+
+    // Let anything the application scheduled on the main queue run.
+    XCTestExpectation *mainQueueDrained = [self expectationWithDescription:@"Main queue drained"];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [mainQueueDrained fulfill];
+    });
+    [self waitForTestExpectations];
+
+    OCMVerifyAll(systemApplication);
+}
+
+- (void)testApplicationReadsBadgeWhenNeeded {
+    PFApplication *application = OCMPartialMock([[PFApplication alloc] init]);
+    id systemApplication = OCMClassMock([UIApplication class]);
+    OCMStub([application systemApplication]).andReturn(systemApplication);
+    OCMStub([systemApplication applicationIconBadgeNumber]).andReturn(7);
+
+    PFAssertEqualInts(application.iconBadgeNumber, 7, @"Application should read the badge on first use");
+    OCMVerify([systemApplication addObserver:OCMOCK_ANY forKeyPath:@"applicationIconBadgeNumber" options:NSKeyValueObservingOptionNew context:nil]);
+}
+#endif
+
 - (void)testInstallationSetsApplicationBadge {
 #if TARGET_OS_IOS
     [PFApplication currentApplication].systemApplication.applicationIconBadgeNumber = 20;
